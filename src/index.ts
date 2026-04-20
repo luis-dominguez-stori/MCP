@@ -1,57 +1,54 @@
 #!/usr/bin/env node
-/**
- * @fileoverview Entry point for the OpenSearch Logs MCP server.
- *
- * This MCP (Model Context Protocol) server provides tools for querying
- * OpenSearch logs from iOS applications. It supports searching by various
- * criteria including free-text queries, trace IDs, service names, and
- * error levels.
- *
- * @module opensearch-logs-mcp
- *
- * @example
- * ```bash
- * # Run the server
- * npm start
- *
- * # Or with ts-node for development
- * npx ts-node src/index.ts
- * ```
- *
- * @requires OPENSEARCH_DEV_USERNAME - Username for dev environment
- * @requires OPENSEARCH_DEV_PASSWORD - Password for dev environment
- * @requires OPENSEARCH_PROD_USERNAME - Username for prod environment
- * @requires OPENSEARCH_PROD_PASSWORD - Password for prod environment
- */
 
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
 import { createServer, getServerInfo } from "./server.js";
+import http from "http";
 
-/**
- * Initializes and starts the MCP server.
- *
- * Creates the server instance, establishes the stdio transport,
- * and begins listening for incoming requests.
- */
-async function main(): Promise<void> {
+const TRANSPORT = process.env.MCP_TRANSPORT ?? "stdio";
+const PORT = parseInt(process.env.PORT ?? "3000", 10);
+
+async function startStdio(): Promise<void> {
   const server = createServer();
   const transport = new StdioServerTransport();
-
   await server.connect(transport);
-
   const info = getServerInfo();
   console.error(`${info.name} v${info.version} running on stdio`);
 }
 
-/**
- * Handles fatal errors during startup.
- *
- * @param error - The error that caused the failure
- */
-function handleFatalError(error: unknown): never {
-  console.error("Fatal error:", error);
-  process.exit(1);
+async function startHttp(): Promise<void> {
+  const info = getServerInfo();
+  const transports: Record<string, SSEServerTransport> = {};
+  const httpServer = http.createServer(async (req, res) => {
+    const url = new URL(req.url ?? "/", `http://localhost:${PORT}`);
+    if (req.method === "GET" && url.pathname === "/health") {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ status: "ok" }));
+      return;
+    }
+    if (req.method === "GET" && url.pathname === "/sse") {
+      const transport = new SSEServerTransport("/messages", res);
+      transports[transport.sessionId] = transport;
+      res.on("close", () => { delete transports[transport.sessionId]; });
+      const server = createServer();
+      await server.connect(transport);
+      return;
+    }
+    if (req.method === "POST" && url.pathname === "/messages") {
+      const sessionId = url.searchParams.get("sessionId") ?? "";
+      const transport = transports[sessionId];
+      if (!transport) { res.writeHead(404); res.end(JSON.stringify({ error: "Session not found" })); return; }
+      await transport.handlePostMessage(req, res);
+      return;
+    }
+    res.writeHead(404);
+    res.end(JSON.stringify({ error: "Not found" }));
+  });
+  httpServer.listen(PORT, () => { console.error(`${info.name} v${info.version} running on HTTP port ${PORT}`); });
 }
 
-// Start the server
-main().catch(handleFatalError);
+async function main(): Promise<void> {
+  if (TRANSPORT === "http") { await startHttp(); } else { await startStdio(); }
+}
+
+main().catch((error) => { console.error("Fatal error:", error); process.exit(1); });
