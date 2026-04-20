@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
+import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { createServer, getServerInfo } from "./server.js";
 import http from "http";
 
@@ -18,7 +18,6 @@ async function startStdio(): Promise<void> {
 
 async function startHttp(): Promise<void> {
   const info = getServerInfo();
-  const transports: Record<string, SSEServerTransport> = {};
 
   const httpServer = http.createServer(async (req, res) => {
     const url = new URL(req.url ?? "/", `http://localhost:${PORT}`);
@@ -29,24 +28,13 @@ async function startHttp(): Promise<void> {
       return;
     }
 
-    if (req.method === "GET" && url.pathname === "/sse") {
-      const transport = new SSEServerTransport("/messages", res);
-      transports[transport.sessionId] = transport;
-      res.on("close", () => { delete transports[transport.sessionId]; });
+    if (url.pathname === "/mcp") {
+      const transport = new StreamableHTTPServerTransport({
+        sessionIdGenerator: undefined,
+      });
       const server = createServer();
       await server.connect(transport);
-      return;
-    }
-
-    if (req.method === "POST" && url.pathname === "/messages") {
-      const sessionId = url.searchParams.get("sessionId") ?? "";
-      const transport = transports[sessionId];
-      if (!transport) {
-        res.writeHead(404);
-        res.end(JSON.stringify({ error: "Session not found" }));
-        return;
-      }
-      await transport.handlePostMessage(req, res);
+      await transport.handleRequest(req, res);
       return;
     }
 
