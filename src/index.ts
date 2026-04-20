@@ -28,12 +28,12 @@ async function startHttp(): Promise<void> {
       return;
     }
 
-    if (url.pathname === "/mcp") {
+    if (url.pathname === "/mcp" || url.pathname === "/sse") {
       const transport = new StreamableHTTPServerTransport({
         sessionIdGenerator: undefined,
       });
-      const server = createServer();
-      await server.connect(transport);
+      const mcpServer = createServer();
+      await mcpServer.connect(transport);
       await transport.handleRequest(req, res);
       return;
     }
